@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QMessageBox,
     QSplitter,
+    QStackedWidget,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
@@ -448,8 +449,8 @@ class AIGenerateDialog(QDialog):
             QMessageBox.warning(self, "提示", "没有可应用的内容")
             return
         
-        # 清理markdown代码块标记
-        if content.startswith("```json"):
+        # 清理代码块标记
+        if content.startswith("``json"):
             content = content[7:]
         elif content.startswith("```"):
             content = content[3:]
@@ -480,3 +481,389 @@ class AIGenerateDialog(QDialog):
         if self._is_generating:
             self.ai_service.cancel()
         super().closeEvent(event)
+
+
+class AIModifyDialog(QDialog):
+    """AI修改提示词对话框 - 流式输出版"""
+    
+    # 修改完成信号，传递修改后的数据
+    modified = pyqtSignal(dict)
+    
+    def __init__(self, current_data: dict, parent=None):
+        super().__init__(parent)
+        self.current_data = current_data
+        self.modified_data = None
+        self.ai_service = AIService()
+        self.config_manager = AIConfigManager()
+        self._is_generating = False
+        self._full_content = ""
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        self.setWindowTitle("AI 修改提示词")
+        self.setMinimumSize(800, 600)
+        self.setModal(True)
+        
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.setContentsMargins(24, 24, 24, 24)
+        
+        # 标题区域
+        header = QWidget()
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        title = QLabel("AI 修改提示词")
+        title.setStyleSheet("font-size: 18px; font-weight: 600;")
+        header_layout.addWidget(title)
+        
+        header_layout.addStretch()
+        
+        # 配置按钮
+        self.config_btn = QPushButton("配置")
+        self.config_btn.clicked.connect(self._show_config)
+        header_layout.addWidget(self.config_btn)
+        
+        layout.addWidget(header)
+        
+        # 配置状态提示
+        self.config_status = QLabel()
+        self.config_status.setStyleSheet("color: #757575; font-size: 12px;")
+        layout.addWidget(self.config_status)
+        self._update_config_status()
+        
+        # 使用分割器分隔输入和输出
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # 输入区域
+        input_container = QWidget()
+        input_layout = QVBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(8)
+        
+        input_label = QLabel("描述你想要的修改：")
+        input_label.setStyleSheet("font-weight: 500; font-size: 13px;")
+        input_layout.addWidget(input_label)
+        
+        self.prompt_input = QTextEdit()
+        self.prompt_input.setPlaceholderText(
+            "例如：\n"
+            "- 将角色改成穿汉服的样子\n"
+            "- 把场景改为雪景\n"
+            "- 让画面更加梦幻一些\n"
+            "- 改成秋天的感觉"
+        )
+        self.prompt_input.setMaximumHeight(120)
+        font = QFont("Microsoft YaHei", 12)
+        self.prompt_input.setFont(font)
+        input_layout.addWidget(self.prompt_input)
+        
+        splitter.addWidget(input_container)
+        
+        # 输出区域（流式显示和对比显示）
+        output_container = QWidget()
+        output_layout = QVBoxLayout(output_container)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(8)
+        
+        output_header = QHBoxLayout()
+        output_label = QLabel("AI 修改结果：")
+        output_label.setStyleSheet("font-weight: 500; font-size: 13px;")
+        output_header.addWidget(output_label)
+        
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: #757575; font-size: 12px;")
+        output_header.addWidget(self.status_label)
+        output_header.addStretch()
+        output_layout.addLayout(output_header)
+        
+        # 结果显示堆栈
+        self.result_stack = QStackedWidget()
+        
+        # 流式输出显示
+        self.output_display = QTextEdit()
+        self.output_display.setReadOnly(True)
+        self.output_display.setPlaceholderText("修改的内容将在这里实时显示...")
+        mono_font = QFont("Consolas", 11)
+        mono_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.output_display.setFont(mono_font)
+        self.output_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1E1E1E;
+                color: #D4D4D4;
+                border: 1px solid #3C3C3C;
+                border-radius: 6px;
+                padding: 12px;
+            }
+        """)
+        self.result_stack.addWidget(self.output_display)
+        
+        # 对比结果显示
+        self.compare_display = QTextEdit()
+        self.compare_display.setReadOnly(True)
+        self.compare_display.setFont(mono_font)
+        self.compare_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #F8F9FA;
+                color: #333333;
+                border: 1px solid #DEE2E6;
+                border-radius: 6px;
+                padding: 12px;
+            }
+        """)
+        self.result_stack.addWidget(self.compare_display)
+        
+        output_layout.addWidget(self.result_stack)
+        
+        splitter.addWidget(output_container)
+        
+        # 设置分割比例
+        splitter.setSizes([150, 350])
+        layout.addWidget(splitter, 1)
+        
+        # 按钮区域
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        
+        self.cancel_btn = QPushButton("关闭")
+        self.cancel_btn.clicked.connect(self._on_cancel)
+        btn_layout.addWidget(self.cancel_btn)
+        
+        btn_layout.addStretch()
+        
+        self.apply_btn = QPushButton("应用到表单")
+        self.apply_btn.setObjectName("secondaryButton")
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self._on_apply)
+        btn_layout.addWidget(self.apply_btn)
+        
+        self.generate_btn = QPushButton("修改")
+        self.generate_btn.setObjectName("primaryButton")
+        self.generate_btn.setMinimumWidth(100)
+        self.generate_btn.clicked.connect(self._on_generate)
+        btn_layout.addWidget(self.generate_btn)
+        
+        layout.addLayout(btn_layout)
+
+    def _update_config_status(self):
+        """更新配置状态显示"""
+        if self.ai_service.is_configured():
+            config = self.config_manager.load_config()
+            model = config.get("model", "未知")
+            base_url = config.get("base_url", "")
+            # 简化显示
+            if "openai.com" in base_url:
+                provider = "OpenAI"
+            elif "deepseek" in base_url:
+                provider = "DeepSeek"
+            elif "dashscope" in base_url:
+                provider = "通义千问"
+            else:
+                provider = base_url.split("//")[-1].split("/")[0]
+            self.config_status.setText(f"已配置: {provider} / {model}")
+            self.config_status.setStyleSheet("color: #4CAF50; font-size: 12px;")
+        else:
+            self.config_status.setText("未配置 API，请先点击「配置」按钮设置")
+            self.config_status.setStyleSheet("color: #FF9800; font-size: 12px;")
+
+    def _show_config(self):
+        """显示配置对话框"""
+        dialog = AIConfigDialog(self)
+        dialog.config_saved.connect(self._update_config_status)
+        dialog.exec()
+
+    def _on_generate(self):
+        """开始生成"""
+        if self._is_generating:
+            # 如果正在生成，点击变为取消
+            self.ai_service.cancel()
+            self._is_generating = False
+            self._set_generating_ui(False)
+            self.status_label.setText("已取消")
+            return
+        
+        # 检查配置
+        if not self.ai_service.is_configured():
+            reply = QMessageBox.question(
+                self,
+                "未配置 API",
+                "尚未配置 AI API，是否现在配置？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._show_config()
+            return
+        
+        # 检查输入
+        prompt = self.prompt_input.toPlainText().strip()
+        if not prompt:
+            QMessageBox.warning(self, "提示", "请输入修改描述")
+            return
+        
+        # 清空输出并开始
+        self.output_display.clear()
+        self.compare_display.clear()
+        self._full_content = ""
+        self._is_generating = True
+        self._set_generating_ui(True)
+        self.apply_btn.setEnabled(False)
+        self.result_stack.setCurrentIndex(0)  # 切换到流式输出视图
+        
+        # 准备当前JSON数据
+        current_json = json.dumps(self.current_data, ensure_ascii=False, indent=2)
+        
+        self.ai_service.generate_modify_async(
+            current_json,
+            prompt,
+            on_finished=self._on_generate_finished,
+            on_error=self._on_generate_error,
+            on_progress=self._on_generate_progress,
+            on_stream_chunk=self._on_stream_chunk,
+            on_stream_done=self._on_stream_done,
+        )
+
+    def _set_generating_ui(self, generating: bool):
+        """设置生成中的UI状态"""
+        self.prompt_input.setReadOnly(generating)
+        self.config_btn.setEnabled(not generating)
+        
+        if generating:
+            self.generate_btn.setText("停止")
+            self.status_label.setText("修改中...")
+        else:
+            self.generate_btn.setText("修改")
+            self.status_label.setText("")
+
+    def _on_generate_progress(self, message: str):
+        """进度更新"""
+        self.status_label.setText(message)
+
+    def _on_stream_chunk(self, chunk: str):
+        """接收流式内容块"""
+        self._full_content += chunk
+        # 在输出显示中追加内容
+        cursor = self.output_display.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        cursor.insertText(chunk)
+        self.output_display.setTextCursor(cursor)
+        self.output_display.ensureCursorVisible()
+
+    def _on_stream_done(self, content: str):
+        """流式传输完成"""
+        self._full_content = content
+        self._is_generating = False
+        self._set_generating_ui(False)
+        self.status_label.setText("修改完成")
+        
+        # 尝试解析JSON验证有效性
+        try:
+            self.modified_data = json.loads(self._full_content)
+            self.apply_btn.setEnabled(True)
+            self.apply_btn.setFocus()
+            # 显示差异对比
+            self._show_differences()
+            # 切换到对比视图
+            self.result_stack.setCurrentIndex(1)
+        except json.JSONDecodeError:
+            self.status_label.setText("修改完成，但内容不是有效的JSON")
+            self.apply_btn.setEnabled(False)
+
+    def _show_differences(self):
+        """显示修改差异"""
+        if not self.modified_data:
+            return
+            
+        differences = []
+        self._compare_dicts(self.current_data, self.modified_data, differences, "")
+        
+        if differences:
+            diff_text = "<h3>以下字段已被修改：</h3><hr>"
+            diff_text += "<br>".join(differences)
+        else:
+            diff_text = "<h3>没有检测到任何修改</h3>"
+            
+        self.compare_display.setHtml(diff_text)
+
+    def _compare_dicts(self, old_dict, new_dict, differences, path):
+        """递归比较两个字典的差异"""
+        all_keys = set(old_dict.keys()) | set(new_dict.keys())
+        
+        for key in all_keys:
+            current_path = f"{path}.{key}" if path else key
+            
+            # 如果键只存在于旧字典中
+            if key not in new_dict:
+                old_value = old_dict[key]
+                if isinstance(old_value, dict):
+                    differences.append(f'<div><strong>❌ {current_path}</strong>: [整个对象被删除]</div>')
+                else:
+                    differences.append(f'<div><strong>❌ {current_path}</strong>: <span style="text-decoration: line-through; color: #888;">{self._format_value(old_value)}</span></div>')
+                continue
+                
+            # 如果键只存在于新字典中
+            if key not in old_dict:
+                new_value = new_dict[key]
+                if isinstance(new_value, dict):
+                    differences.append(f'<div><strong>➕ {current_path}</strong>: [新增对象]</div>')
+                else:
+                    differences.append(f'<div><strong>➕ {current_path}</strong>: <span style="color: #2E7D32;">{self._format_value(new_value)}</span></div>')
+                continue
+                
+            # 如果键在两个字典中都存在
+            old_value = old_dict[key]
+            new_value = new_dict[key]
+            
+            # 如果都是字典，递归比较
+            if isinstance(old_value, dict) and isinstance(new_value, dict):
+                self._compare_dicts(old_value, new_value, differences, current_path)
+            # 如果值不同
+            elif old_value != new_value:
+                if isinstance(old_value, list) and isinstance(new_value, list):
+                    old_str = ", ".join(str(x) for x in old_value)
+                    new_str = ", ".join(str(x) for x in new_value)
+                    differences.append(f'<div><strong>🔄 {current_path}</strong>:<br>'
+                                      f'<span style="text-decoration: line-through; color: #888;">&nbsp;&nbsp;{old_str}</span><br>'
+                                      f'<span style="color: #2E7D32;">&nbsp;&nbsp;{new_str}</span></div>')
+                else:
+                    differences.append(f'<div><strong>🔄 {current_path}</strong>:<br>'
+                                      f'<span style="text-decoration: line-through; color: #888;">&nbsp;&nbsp;{self._format_value(old_value)}</span><br>'
+                                      f'<span style="color: #2E7D32;">&nbsp;&nbsp;{self._format_value(new_value)}</span></div>')
+
+    def _format_value(self, value):
+        """格式化值用于显示"""
+        if isinstance(value, str) and len(value) > 50:
+            return value[:50] + "..."
+        return str(value)
+
+    def _on_generate_finished(self, data: dict):
+        """生成完成"""
+        self.modified.emit(data)
+        self.accept()
+
+    def _on_generate_error(self, error_msg: str):
+        """生成出错"""
+        self._is_generating = False
+        self._set_generating_ui(False)
+        self.status_label.setText("错误")
+        QMessageBox.critical(self, "AI生成错误", error_msg)
+
+    def _on_apply(self):
+        """应用修改结果"""
+        try:
+            if self.modified_data:
+                self.modified.emit(self.modified_data)
+                self.accept()
+            elif self._full_content:
+                data = json.loads(self._full_content)
+                self.modified.emit(data)
+                self.accept()
+            else:
+                QMessageBox.critical(self, "错误", "没有有效的修改数据可应用")
+        except json.JSONDecodeError as e:
+            QMessageBox.critical(self, "错误", f"JSON格式错误:\n{str(e)}")
+
+    def _on_cancel(self):
+        """取消/关闭对话框"""
+        if self._is_generating:
+            self.ai_service.cancel()
+        self.reject()

@@ -167,6 +167,13 @@ class PromptGeneratorApp(QMainWindow):
         ai_btn.clicked.connect(self._show_ai_generate_dialog)
         layout.addWidget(ai_btn)
 
+        # 添加AI修改按钮
+        ai_modify_btn = QPushButton("AI 修改")
+        ai_modify_btn.setObjectName("aiGenerateButton")  # 使用相同的对象名以保持样式一致
+        ai_modify_btn.setToolTip("使用AI根据描述修改当前提示词")
+        ai_modify_btn.clicked.connect(self._show_ai_modify_dialog)
+        layout.addWidget(ai_modify_btn)
+
         layout.addStretch()
 
         # 保存预设按钮
@@ -688,14 +695,31 @@ class PromptGeneratorApp(QMainWindow):
 
     def _show_ai_generate_dialog(self):
         """显示AI生成对话框"""
+        from components.ai_dialog import AIGenerateDialog
         dialog = AIGenerateDialog(self)
         dialog.generated.connect(self._on_ai_generated)
         dialog.exec()
 
+    def _show_ai_modify_dialog(self):
+        """显示AI修改对话框"""
+        from components.ai_dialog import AIModifyDialog
+        # 获取当前表单数据
+        current_data = self._collect_form_data()
+        dialog = AIModifyDialog(current_data, self)
+        dialog.modified.connect(self._on_ai_modified)
+        dialog.exec()
+
     def _on_ai_generated(self, data: dict):
-        """AI生成完成，填充到表单"""
+        """AI生成完成后应用到表单"""
         self._fill_form_from_data(data)
-        self._show_toast("AI生成的提示词已填充到表单")
+        self.current_preset_name = None
+        self._show_toast("已应用AI生成的提示词")
+
+    def _on_ai_modified(self, data: dict):
+        """AI修改完成后应用到表单"""
+        self._fill_form_from_data(data)
+        self.current_preset_name = None
+        self._show_toast("已应用AI修改的提示词")
 
     # ========== 其他方法 ==========
 

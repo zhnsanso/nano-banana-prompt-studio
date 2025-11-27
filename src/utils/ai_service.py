@@ -71,6 +71,33 @@ SYSTEM_PROMPT = """你是一个专业的AI绘画提示词生成助手。用户�
 4. 生成的提示词要有画面感，用词要专业、优美
 5. 格式要完整按照示例实现，不要遗漏任何字段"""
 
+# 修改提示词的系统提示
+MODIFY_SYSTEM_PROMPT = """你是一个专业的AI绘画提示词修改助手。用户会提供一个当前的JSON格式提示词和修改要求，你需要根据修改要求对当前提示词进行调整并返回修改后的JSON。
+
+请严格按照以下要求操作：
+1. 仔细分析用户当前的提示词结构和内容
+2. 根据用户的修改要求，针对性地调整相应字段
+3. 保持原有的JSON结构不变，只修改相关内容
+4. 确保修改后的内容仍然完整和合理
+5. 只输出修改后的JSON，不要有任何解释或其他内容
+
+示例：
+当前提示词：
+{
+  "风格模式": "高保真二次元插画, 官方立绘风格, 赛璐璐上色",
+  "画面气质": "清透, 治愈, 空灵, 极致可爱, 梦幻",
+  // ... 其他字段
+}
+
+用户要求："把场景改成雪景，人物穿冬装"
+
+修改后：
+{
+  "风格模式": "高保真二次元插画, 官方立绘风格, 赛璐璐上色",
+  "画面气质": "清透, 治愈, 空灵, 极致可爱, 梦幻",
+  // ... 其他字段，但场景相关的字段被修改为雪景和冬装
+}"""
+
 class AIGenerateThread(QThread):
     """AI生成线程 - 流式输出"""
     
@@ -176,6 +203,112 @@ class AIGenerateThread(QThread):
             self.error.emit(f"发生未知错误: {str(e)}\n{traceback.format_exc()}")
 
 
+class AIModifyThread(QThread):
+    """AI修改线程 - 流式输出"""
+    
+    # 信号
+    finished = pyqtSignal(dict)      # 成功时发送生成的数据
+    error = pyqtSignal(str)          # 错误时发送错误信息
+    progress = pyqtSignal(str)       # 进度信息
+    stream_chunk = pyqtSignal(str)   # 流式内容块
+    stream_done = pyqtSignal(str)    # 流式完成，发送完整内容
+    
+    def __init__(self, current_data: str, modify_request: str, config_manager: AIConfigManager):
+        super().__init__()
+        self.current_data = current_data
+        self.modify_request = modify_request
+        self.config_manager = config_manager
+        self._cancelled = False
+    
+    def cancel(self):
+        """取消生成"""
+        self._cancelled = True
+    
+    def run(self):
+        try:
+            self.progress.emit("正在连接AI服务...")
+            
+            config = self.config_manager.load_config()
+            base_url = config.get("base_url", "").rstrip("/")
+            api_key = config.get("api_key", "")
+            model = config.get("model", "gpt-4o-mini")
+            
+            if not api_key:
+                self.error.emit("请先配置API密钥")
+                return
+            
+            # 延迟导入
+            try:
+                from openai import OpenAI
+            except ImportError as e:
+                self.error.emit(f"openai 导入失败: {e}")
+                return
+            except Exception as e:
+                self.error.emit(f"openai 加载异常: {type(e).__name__}: {e}")
+                return
+            
+            # 创建客户端（禁用 http2 避免 cffi/pycparser 问题）
+            import httpx
+            http_client = httpx.Client(http2=False)
+            client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=180,
+                http_client=http_client,
+            )
+            
+            self.progress.emit("正在修改提示词...")
+            
+            # 构建消息
+            messages = [
+                {"role": "system", "content": MODIFY_SYSTEM_PROMPT},
+                {"role": "user", "content": f"当前提示词：\n{self.current_data}\n\n修改要求：{self.modify_request}\n\n请返回修改后的JSON提示词:"}
+            ]
+            
+            # 流式调用API
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    stream=True,
+                )
+                
+                full_content = ""
+                for chunk in stream:
+                    if self._cancelled:
+                        self.progress.emit("已取消")
+                        return
+                    
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if delta and delta.content:
+                            content_piece = delta.content
+                            full_content += content_piece
+                            # 发送流式块
+                            self.stream_chunk.emit(content_piece)
+                
+                # 流式完成
+                self.stream_done.emit(full_content)
+                
+            except Exception as e:
+                error_msg = str(e)
+                if "401" in error_msg or "Unauthorized" in error_msg:
+                    self.error.emit("API密钥无效或已过期，请检查配置")
+                elif "429" in error_msg or "rate" in error_msg.lower():
+                    self.error.emit("请求过于频繁，请稍后再试")
+                elif "timeout" in error_msg.lower():
+                    self.error.emit("请求超时，请检查网络连接或稍后再试")
+                elif "connect" in error_msg.lower():
+                    self.error.emit(f"网络连接失败: {error_msg}")
+                else:
+                    self.error.emit(f"API调用失败: {error_msg}")
+                return
+                
+        except Exception as e:
+            import traceback
+            self.error.emit(f"发生未知错误: {str(e)}\n{traceback.format_exc()}")
+
+
 class AIService:
     """AI服务封装类"""
     
@@ -213,6 +346,47 @@ class AIService:
             self._current_thread.wait(1000)
         
         thread = AIGenerateThread(user_prompt, self.config_manager)
+        thread.finished.connect(on_finished)
+        thread.error.connect(on_error)
+        if on_progress:
+            thread.progress.connect(on_progress)
+        if on_stream_chunk:
+            thread.stream_chunk.connect(on_stream_chunk)
+        if on_stream_done:
+            thread.stream_done.connect(on_stream_done)
+        
+        self._current_thread = thread
+        thread.start()
+        return thread
+    
+    def generate_modify_async(
+        self,
+        current_data: str,
+        modify_request: str,
+        on_finished: Callable[[dict], None],
+        on_error: Callable[[str], None],
+        on_progress: Callable[[str], None] = None,
+        on_stream_chunk: Callable[[str], None] = None,
+        on_stream_done: Callable[[str], None] = None,
+    ) -> AIModifyThread:
+        """
+        异步流式修改提示词
+        
+        :param current_data: 当前提示词的JSON字符串
+        :param modify_request: 用户的修改要求
+        :param on_finished: 成功回调（JSON解析后），参数为生成的数据字典
+        :param on_error: 错误回调，参数为错误信息
+        :param on_progress: 进度回调，参数为进度信息
+        :param on_stream_chunk: 流式内容块回调
+        :param on_stream_done: 流式完成回调，参数为完整文本
+        :return: 线程对象
+        """
+        # 如果有正在运行的线程，先停止
+        if self._current_thread and self._current_thread.isRunning():
+            self._current_thread.cancel()
+            self._current_thread.wait(1000)
+        
+        thread = AIModifyThread(current_data, modify_request, self.config_manager)
         thread.finished.connect(on_finished)
         thread.error.connect(on_error)
         if on_progress:
