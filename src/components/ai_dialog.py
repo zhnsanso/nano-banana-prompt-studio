@@ -682,6 +682,18 @@ class AIModifyDialog(QDialog):
             self.status_label.setText("已取消")
             return
         
+        # 如果已有生成内容，添加确认提示
+        if self._full_content and not self._is_generating:
+            reply = QMessageBox.question(
+                self,
+                "确认重新生成",
+                "已有生成结果，是否确定要重新生成？这将覆盖当前结果。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+        
         # 检查配置
         if not self.ai_service.is_configured():
             reply = QMessageBox.question(
