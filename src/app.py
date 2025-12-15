@@ -21,9 +21,10 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QFileDialog,
     QSizePolicy,
+    QDialog,
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QAction, QPixmap, QIcon, QImage
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QAction, QPixmap, QIcon, QImage, QCursor
 
 try:
     import pyperclip
@@ -43,6 +44,112 @@ from components.ai_image_dialog import GeminiImageThread
 from components.gemini_client import ASPECT_RATIO_LIST, IMAGE_SIZE_LIST
 from utils.ai_config import AIConfigManager
 from styles import LIGHT_THEME
+
+
+class ClickableLabel(QLabel):
+    """可点击的标签，用于图片预览"""
+    
+    clicked = pyqtSignal()  # 需要导入 pyqtSignal
+    
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+    
+    def mousePressEvent(self, event):
+        """鼠标点击事件"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class ImagePreviewDialog(QDialog):
+    """图片预览对话框 - 显示大图"""
+    
+    def __init__(self, pixmap: QPixmap, parent=None):
+        super().__init__(parent)
+        self.pixmap = pixmap
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        self.setWindowTitle("图片预览")
+        self.setModal(True)
+        self.setMinimumSize(800, 600)
+        
+        # 设置样式
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #1a1a1a;
+            }
+            QLabel {
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # 图片显示区域
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setScaledContents(False)
+        layout.addWidget(self.image_label)
+        
+        # 显示图片
+        self._update_image()
+        
+        # 设置窗口大小，适应图片但不超过屏幕
+        screen = self.screen().availableGeometry()
+        max_width = int(screen.width() * 0.9)
+        max_height = int(screen.height() * 0.9)
+        
+        img_width = self.pixmap.width()
+        img_height = self.pixmap.height()
+        
+        # 计算合适的显示尺寸
+        if img_width <= max_width and img_height <= max_height:
+            self.resize(img_width, img_height)
+        else:
+            # 需要缩放
+            scale = min(max_width / img_width, max_height / img_height)
+            self.resize(int(img_width * scale), int(img_height * scale))
+    
+    def _update_image(self):
+        """更新显示的图片"""
+        if not self.pixmap:
+            return
+        
+        # 获取标签的实际尺寸
+        label_size = self.image_label.size()
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            # 如果尺寸还未确定，先设置原始图片
+            self.image_label.setPixmap(self.pixmap)
+            return
+        
+        # 缩放图片以适应标签大小，保持宽高比
+        scaled = self.pixmap.scaled(
+            label_size,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image_label.setPixmap(scaled)
+    
+    def resizeEvent(self, event):
+        """窗口大小改变时更新图片"""
+        super().resizeEvent(event)
+        self._update_image()
+    
+    def keyPressEvent(self, event):
+        """按ESC或Enter关闭对话框"""
+        if event.key() == Qt.Key.Key_Escape or event.key() == Qt.Key.Key_Return:
+            self.close()
+        super().keyPressEvent(event)
+    
+    def mousePressEvent(self, event):
+        """点击任意位置关闭对话框"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.close()
+        super().mousePressEvent(event)
 
 
 class PromptGeneratorApp(QMainWindow):
@@ -330,6 +437,42 @@ class PromptGeneratorApp(QMainWindow):
 
         layout.addWidget(negative_container)
 
+        # ===== 8. 特别要求（可选） =====
+        special_container = QWidget()
+        special_layout = QVBoxLayout(special_container)
+        special_layout.setContentsMargins(0, 0, 0, 0)
+        special_layout.setSpacing(0)
+
+        # 启用开关
+        self.special_requirement_enabled = QCheckBox("启用特别要求")
+        self.special_requirement_enabled.setObjectName("specialRequirementToggle")
+        self.special_requirement_enabled.setChecked(False)  # 默认不启用
+        self.special_requirement_enabled.stateChanged.connect(self._on_special_requirement_toggle_changed)
+        special_layout.addWidget(self.special_requirement_enabled)
+
+        # 特别要求分组
+        self.special_requirement_group = FieldGroup("特别要求", color_class="special")
+        self.special_requirement_input = QTextEdit()
+        self.special_requirement_input.setPlaceholderText("请输入额外的特别要求，这些内容不会纳入AI提示词生成和修改，只在生成图片时补充...")
+        self.special_requirement_input.setMaximumHeight(100)
+        self.special_requirement_input.setStyleSheet("""
+            QTextEdit {
+                padding: 8px;
+                border: 1px solid #d9d9d9;
+                border-radius: 4px;
+                background-color: white;
+                font-size: 12px;
+            }
+            QTextEdit:focus {
+                border-color: #40a9ff;
+            }
+        """)
+        self.special_requirement_group.add_widget(self.special_requirement_input)
+        self.special_requirement_group.setVisible(False)  # 默认隐藏
+        special_layout.addWidget(self.special_requirement_group)
+
+        layout.addWidget(special_container)
+
         layout.addStretch()
         scroll.setWidget(container)
         return scroll
@@ -509,13 +652,15 @@ class PromptGeneratorApp(QMainWindow):
         canvas_layout = QVBoxLayout(preview_canvas)
         canvas_layout.setContentsMargins(16, 16, 16, 16)
 
-        self.preview_area = QLabel("图片生成后会显示在这里")
+        self.preview_area = ClickableLabel("图片生成后会显示在这里")
         self.preview_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_area.setMinimumHeight(300)
         self.preview_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_area.setStyleSheet("color: #bfbfbf; font-size: 13px; border: none;")
         # 禁用自动缩放，使用手动缩放以保持宽高比
         self.preview_area.setScaledContents(False)
+        # 连接点击事件
+        self.preview_area.clicked.connect(self._show_image_preview)
         canvas_layout.addWidget(self.preview_area)
 
         preview_layout.addWidget(preview_canvas, 1)
@@ -616,6 +761,12 @@ class PromptGeneratorApp(QMainWindow):
         enabled = state == 2  # Qt.CheckState.Checked = 2
         self.negative_group.setVisible(enabled)
         self._generate_json()
+
+    def _on_special_requirement_toggle_changed(self, state: int):
+        """特别要求开关切换"""
+        enabled = state == 2  # Qt.CheckState.Checked = 2
+        self.special_requirement_group.setVisible(enabled)
+        # 特别要求不纳入JSON预览，所以不需要调用 _generate_json()
 
     def _generate_json(self):
         """生成JSON提示词"""
@@ -1068,6 +1219,12 @@ class PromptGeneratorApp(QMainWindow):
             QMessageBox.warning(self, "提示", "当前提示词为空，请先填写表单内容")
             return
 
+        # 如果启用了特别要求，追加到prompt后面
+        if self.special_requirement_enabled.isChecked():
+            special_text = self.special_requirement_input.toPlainText().strip()
+            if special_text:
+                prompt_text = prompt_text + "\n\n特别要求：" + special_text
+
         if not self.config_manager.get_gemini_api_key():
             reply = QMessageBox.question(
                 self,
@@ -1089,6 +1246,8 @@ class PromptGeneratorApp(QMainWindow):
         self.preview_area.setPixmap(QPixmap())
         self.save_image_btn.setEnabled(False)
         self._set_image_status("提交到 Gemini 服务", "#1890ff")
+        # 禁用点击预览功能
+        self._enable_image_preview(False)
 
         self.worker_thread = GeminiImageThread(
             prompt=prompt_text,
@@ -1115,12 +1274,16 @@ class PromptGeneratorApp(QMainWindow):
         self.generated_pixmap = pixmap
         self._refresh_preview_pixmap()
         self.save_image_btn.setEnabled(True)
-        self._set_image_status("生成完成", "#52c41a")
+        self._set_image_status("生成完成，点击图片可查看大图", "#52c41a")
+        # 启用点击预览功能
+        self._enable_image_preview(True)
 
     def _on_generation_error(self, message: str):
         """生成错误"""
         self._set_image_status(f"生成失败：{message}", "#ff4d4f")
         self.preview_area.setText("生成失败，请调整参数后重试")
+        # 禁用点击预览功能
+        self._enable_image_preview(False)
         # 确保在错误时也恢复按钮状态（虽然 _on_thread_finished 也会调用，但这里明确调用更安全）
         self._set_image_generating_state(False)
 
@@ -1197,6 +1360,23 @@ class PromptGeneratorApp(QMainWindow):
         
         self.preview_area.setPixmap(scaled)
         self.preview_area.setScaledContents(False)  # 禁用自动缩放，使用手动缩放
+    
+    def _enable_image_preview(self, enabled: bool):
+        """启用/禁用图片预览功能"""
+        if enabled and self.generated_pixmap:
+            # 设置手型光标，提示可点击
+            self.preview_area.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        else:
+            # 恢复默认光标
+            self.preview_area.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+    
+    def _show_image_preview(self):
+        """显示图片预览对话框"""
+        if not self.generated_pixmap:
+            return
+        
+        dialog = ImagePreviewDialog(self.generated_pixmap, self)
+        dialog.exec()
 
     def resizeEvent(self, event):
         """窗口大小改变事件"""
@@ -1259,6 +1439,10 @@ class PromptGeneratorApp(QMainWindow):
             # 重置反向提示词开关
             self.negative_prompt_enabled.setChecked(False)
             self.negative_group.setVisible(False)
+            # 重置特别要求开关
+            self.special_requirement_enabled.setChecked(False)
+            self.special_requirement_group.setVisible(False)
+            self.special_requirement_input.clear()
             # 清空生图相关
             if hasattr(self, 'selected_images'):
                 self._clear_images()
@@ -1271,6 +1455,8 @@ class PromptGeneratorApp(QMainWindow):
                 self.save_image_btn.setEnabled(False)
             if hasattr(self, 'image_status_label'):
                 self._set_image_status("准备就绪")
+            # 禁用预览功能
+            self._enable_image_preview(False)
             self._show_toast("表单已清空")
 
     def _show_toast(self, message: str):

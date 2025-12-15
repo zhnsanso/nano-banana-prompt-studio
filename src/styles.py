@@ -218,6 +218,17 @@ QScrollBar::sub-page:horizontal {{
     border-bottom: 2px solid #FECACA;
 }}
 
+#groupTitle_special {{
+    color: #0891B2;  /* 青色 - 特别要求 */
+    border-bottom-color: #A5F3FC;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 0 0 8px 0;
+    border: none;
+    border-bottom: 2px solid #A5F3FC;
+}}
+
 #fieldLabel {{
     color: {TEXT_SECONDARY};
     font-size: 12px;
@@ -397,7 +408,7 @@ QCheckBox::indicator:checked {{
     image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cGF0aCBkPSJNMTAuNSAzTDQuNSA5TDEuNSA2IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjwvc3ZnPg==);
 }}
 
-#negativePromptToggle, #aspectToggle {{
+#negativePromptToggle, #aspectToggle, #specialRequirementToggle {{
     padding: 8px 0;
     margin-bottom: 4px;
     font-weight: 500;
