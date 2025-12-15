@@ -178,6 +178,7 @@ class PromptGeneratorApp(QMainWindow):
 
         # 刷新按钮
         refresh_btn = QPushButton("刷新")
+        refresh_btn.setObjectName("secondaryButton")
         refresh_btn.setToolTip("刷新预设列表")
         refresh_btn.clicked.connect(self._load_presets_to_selector)
         layout.addWidget(refresh_btn)
@@ -200,18 +201,15 @@ class PromptGeneratorApp(QMainWindow):
 
         layout.addStretch()
 
-        # 保存预设按钮
-        save_btn = QPushButton("保存为预设")
-        save_btn.clicked.connect(self._save_as_preset)
-        layout.addWidget(save_btn)
-
         # 管理预设按钮
         manage_btn = QPushButton("管理预设")
+        manage_btn.setObjectName("secondaryButton")
         manage_btn.clicked.connect(self._show_preset_menu)
         layout.addWidget(manage_btn)
 
         # AI配置按钮
         ai_config_btn = QPushButton("AI配置")
+        ai_config_btn.setObjectName("secondaryButton")
         ai_config_btn.clicked.connect(self._open_ai_config_dialog)
         layout.addWidget(ai_config_btn)
 
@@ -904,10 +902,10 @@ class PromptGeneratorApp(QMainWindow):
             }
         """)
 
-        # 刷新列表
-        refresh_action = QAction("刷新预设列表", self)
-        refresh_action.triggered.connect(self._load_presets_to_selector)
-        menu.addAction(refresh_action)
+        # 保存为预设
+        save_action = QAction("保存为预设", self)
+        save_action.triggered.connect(self._save_as_preset)
+        menu.addAction(save_action)
 
         menu.addSeparator()
 
