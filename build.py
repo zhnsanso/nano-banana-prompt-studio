@@ -65,9 +65,9 @@ def build_exe():
         '--icon=images/logo.png',               # 应用图标
         
         # 添加数据文件（注意：不要打包 ai_config.yaml，里面有密钥）
-        '--add-data=src/config/options.yaml;config',  # 只打包 options.yaml
-        '--add-data=src/presets;presets',             # 预设目录
-        '--add-data=images/logo.png;images',          # logo图片
+        f'--add-data=src/config/options.yaml{os.pathsep}config',  # 只打包 options.yaml
+        f'--add-data=src/presets{os.pathsep}presets',             # 预设目录
+        f'--add-data=images/logo.png{os.pathsep}images',          # logo图片
         
         # 隐藏导入（确保所有模块都被包含）
         '--hidden-import=PyQt6.QtWidgets',
@@ -285,15 +285,26 @@ def create_output():
     
     # 复制打包结果到 output
     dist_app = Path(f'dist/{APP_NAME}')
+    if sys.platform == 'darwin':
+        dist_app = Path(f'dist/{APP_NAME}.app')
+        
     if dist_app.exists():
-        for item in dist_app.iterdir():
-            dest = output_dir / item.name
-            if item.is_dir():
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(item, dest)
-            else:
-                shutil.copy2(item, dest)
+        # macOS .app 是一个文件夹，直接复制整个 .app
+        if sys.platform == 'darwin':
+            dest = output_dir / dist_app.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(dist_app, dest)
+        else:
+            # Windows/Linux 复制文件夹内的内容
+            for item in dist_app.iterdir():
+                dest = output_dir / item.name
+                if item.is_dir():
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(item, dest)
+                else:
+                    shutil.copy2(item, dest)
     
     # 确保 config 和 presets 目录存在且可写
     config_dir = output_dir / 'config'
